@@ -12,14 +12,17 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT_DIR))
 
 from core.llm_client import LLMClient
+from core.rag_engine import RAGEngine
 
 SYSTEM_PROMPT = """You are a Senior AWS CloudOps & Site Reliability Engineer.
 Analyze the provided AWS CloudWatch Logs and deliver a concise, actionable incident report.
 
+If INTERNAL RUNBOOKS / SOPs are provided and match the error, prioritize the company-approved remediation steps from the runbook.
+
 STRUCTURE YOUR RESPONSE AS:
 1. **Root Cause:** Exact technical reason for the failure (cite specific error codes, ARNs, or services from the logs).
 2. **Affected Component:** The IAM role, Lambda function, RDS instance, or service experiencing the issue.
-3. **Remediation:** Exact AWS CLI command, IAM policy snippet, or configuration fix to resolve it.
+3. **Remediation:** Exact AWS CLI command, IAM policy snippet, or internal SOP fix to resolve it.
 
 Keep it strictly technical and concise. Do not hallucinate details not present in the logs.
 """
@@ -94,16 +97,36 @@ def fetch_cloudwatch_logs(
         sys.exit(1)
 
 
-def analyze_logs(log_data: str, provider: str = None):
-    """Send raw logs to the unified LLM client for root cause analysis."""
+def fetch_rag_context(log_data: str) -> str:
+    """Query local ChromaDB for matching internal AWS/CloudWatch runbooks."""
+    try:
+        rag = RAGEngine()
+        hits = rag.search(log_data[-1200:], top_k=2)
+        if hits:
+            print("[📚] Retrieved matching internal runbooks from ChromaDB.")
+        return hits
+    except Exception as e:
+        print(f"[⚠️] RAG lookup skipped ({e})")
+        return ""
+
+
+def analyze_logs(log_data: str, provider: str = None, use_rag: bool = True):
+    """Send raw logs (+ optional RAG runbooks) to the unified LLM client."""
     if len(log_data) > 6000:
         log_data = "...[older logs truncated]...\n" + log_data[-6000:]
+
+    runbook_context = fetch_rag_context(log_data) if use_rag else ""
+
+    prompt_parts = []
+    if runbook_context:
+        prompt_parts.append(f"=== INTERNAL RUNBOOKS / SOPs ===\n{runbook_context}\n")
+    prompt_parts.append(f"=== AWS CLOUDWATCH LOGS ===\n{log_data}")
 
     client = LLMClient(provider=provider, role="specialist")
     print(f"[🧠] Analyzing logs | Provider: {client.provider} | Model: {client.model}")
 
     analysis = client.generate(
-        prompt=f"Analyze these AWS CloudWatch logs:\n\n{log_data}",
+        prompt=f"Analyze these AWS CloudWatch logs:\n\n" + "\n".join(prompt_parts),
         system_prompt=SYSTEM_PROMPT,
         temperature=0.1,
     )
@@ -136,6 +159,9 @@ if __name__ == "__main__":
         "--mock", action="store_true", help="Use built-in mock error logs for offline testing"
     )
     parser.add_argument(
+        "--no-rag", action="store_true", help="Disable local ChromaDB runbook lookup"
+    )
+    parser.add_argument(
         "--provider", choices=["ollama", "bedrock"], default=None, help="Override LLM provider"
     )
     args = parser.parse_args()
@@ -161,4 +187,4 @@ if __name__ == "__main__":
             )
             sys.exit(0)
 
-    analyze_logs(logs_text, provider=args.provider)
+    analyze_logs(logs_text, provider=args.provider, use_rag=not args.no_rag)

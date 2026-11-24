@@ -8,6 +8,7 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT_DIR))
 
 from core.llm_client import LLMClient
+from core.rag_engine import RAGEngine
 
 SYSTEM_PROMPT = """You are a Senior AWS Security Architect specializing in IAM least-privilege policies.
 Your task is to convert a user's plain-English permission request into a valid AWS IAM Policy JSON.
@@ -16,7 +17,8 @@ STRICT RULES:
 1. Follow the Principle of Least Privilege. Never use "*" for Action unless explicitly requested.
 2. Scope Resource ARNs tightly using realistic placeholders (e.g., arn:aws:s3:::my-bucket/*) instead of "*" wherever AWS supports resource-level permissions.
 3. Include a descriptive "Sid" for every statement and always use "Version": "2012-10-17".
-4. Output ONLY raw, valid JSON. Do NOT include markdown backticks (```json), explanations, or extra text.
+4. If INTERNAL INFOSEC GUARDRAILS are provided and apply to the requested AWS service, you MUST enforce their mandatory rules (such as Condition blocks or action scoping) in the generated JSON.
+5. Output ONLY raw, valid JSON. Do NOT include markdown backticks (```json), explanations, or extra text.
 """
 
 
@@ -60,12 +62,37 @@ def security_lint(policy: dict) -> list[str]:
     return warnings
 
 
-def generate_iam_policy(request: str, provider: str = None, output_file: str = None):
+def fetch_rag_context(request: str) -> str:
+    """Query local ChromaDB for matching internal InfoSec IAM guardrails."""
+    try:
+        rag = RAGEngine()
+        hits = rag.search(f"AWS IAM InfoSec guardrail policy for: {request}", top_k=2)
+        if hits:
+            print("[📚] Retrieved matching InfoSec guardrails from ChromaDB.")
+        return hits
+    except Exception as e:
+        print(f"[⚠️] RAG lookup skipped ({e})")
+        return ""
+
+
+def generate_iam_policy(
+    request: str, provider: str = None, output_file: str = None, use_rag: bool = True
+):
+    guardrails = fetch_rag_context(request) if use_rag else ""
+
+    prompt_parts = []
+    if guardrails:
+        prompt_parts.append(f"=== INTERNAL INFOSEC GUARDRAILS ===\n{guardrails}\n")
+    prompt_parts.append(
+        f"Create a least-privilege AWS IAM policy JSON for: {request}\n"
+        "Remember: output ONLY raw, valid JSON."
+    )
+
     client = LLMClient(provider=provider, role="specialist")
     print(f"\n[🔐] Generating IAM Policy | Provider: {client.provider} | Model: {client.model}")
 
     raw_output = client.generate(
-        prompt=f"Create a least-privilege AWS IAM policy for: {request}",
+        prompt="\n".join(prompt_parts),
         system_prompt=SYSTEM_PROMPT,
         temperature=0.0,
     )
@@ -102,6 +129,7 @@ if __name__ == "__main__":
     parser.add_argument("request", nargs="?", help="Plain-English IAM permission request")
     parser.add_argument("--provider", choices=["ollama", "bedrock"], default=None, help="Override LLM provider")
     parser.add_argument("--output", "-o", default=None, help="Save generated JSON policy to a file")
+    parser.add_argument("--no-rag", action="store_true", help="Disable local ChromaDB InfoSec guardrail lookup")
     args = parser.parse_args()
 
     user_request = args.request or input("Describe the AWS permissions you need:\n> ").strip()
@@ -109,4 +137,9 @@ if __name__ == "__main__":
         print("Error: Permission request cannot be empty.")
         sys.exit(1)
 
-    generate_iam_policy(user_request, provider=args.provider, output_file=args.output)
+    generate_iam_policy(
+        user_request,
+        provider=args.provider,
+        output_file=args.output,
+        use_rag=not args.no_rag,
+    )

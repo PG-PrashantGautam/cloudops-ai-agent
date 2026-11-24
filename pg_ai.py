@@ -62,7 +62,9 @@ def route_query(query: str, provider: str = None) -> dict:
         sys.exit(1)
 
 
-def dispatch_to_specialist(decision: dict, provider: str = None, mock: bool = False):
+def dispatch_to_specialist(
+    decision: dict, provider: str = None, mock: bool = False, no_rag: bool = False
+):
     """Execute the matching specialist script using the active Python interpreter."""
     intent = decision.get("intent", "unknown").lower()
     params = decision.get("parameters", {})
@@ -110,6 +112,8 @@ def dispatch_to_specialist(decision: dict, provider: str = None, mock: bool = Fa
                 "--type", str(params.get("res_type", "pod")),
                 "--name", str(params.get("res_name", "")),
             ]
+        if no_rag:
+            cmd += ["--no-rag"]
 
     else:
         print("[❓] Intent not recognized. Try asking about IAM policies, CloudWatch logs, AWS costs, or EKS pods.")
@@ -128,7 +132,15 @@ if __name__ == "__main__":
     parser.add_argument("query", nargs="?", help="Natural-language CloudOps request")
     parser.add_argument("--provider", choices=["ollama", "bedrock"], default=None, help="Override LLM provider")
     parser.add_argument("--mock", action="store_true", help="Run backend specialist in offline mock mode")
+    parser.add_argument("--no-rag", action="store_true", help="Disable local ChromaDB runbook lookup")
+    parser.add_argument("--ingest", action="store_true", help="Ingest all runbooks in knowledge_base/runbooks/ into ChromaDB")
     args = parser.parse_args()
+
+    if args.ingest:
+        from core.rag_engine import RAGEngine
+        count = RAGEngine().ingest_runbooks()
+        print(f"[✅] Knowledge base updated. Total chunks in ChromaDB: {count}")
+        sys.exit(0)
 
     user_query = args.query or input("Ask PG-AI:\n> ").strip()
     if not user_query:
@@ -136,4 +148,6 @@ if __name__ == "__main__":
         sys.exit(1)
 
     route_decision = route_query(user_query, provider=args.provider)
-    dispatch_to_specialist(route_decision, provider=args.provider, mock=args.mock)
+    dispatch_to_specialist(
+        route_decision, provider=args.provider, mock=args.mock, no_rag=args.no_rag
+    )

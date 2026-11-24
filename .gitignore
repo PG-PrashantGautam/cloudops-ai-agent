@@ -25,3 +25,5 @@ Thumbs.db
 # Logs & Archives
 *.log
 *.zip
+chroma_db/
+chroma_db/

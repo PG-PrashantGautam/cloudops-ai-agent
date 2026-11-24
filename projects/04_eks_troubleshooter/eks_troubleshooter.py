@@ -9,9 +9,12 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT_DIR))
 
 from core.llm_client import LLMClient
+from core.rag_engine import RAGEngine
 
 SYSTEM_PROMPT = """You are a Senior Kubernetes & Amazon EKS Site Reliability Engineer.
 Analyze the provided live `kubectl` diagnostics (Status, Describe output, Namespace Warnings, Logs, or Endpoints) and deliver a sharp, actionable troubleshooting report.
+
+If INTERNAL RUNBOOKS / SOPs are provided and match the issue, prioritize the company-approved fix and exact commands from the runbook.
 
 STRUCTURE YOUR RESPONSE AS:
 1. **Root Cause:** Exact technical reason for the failure (cite specific exit codes, events, or log lines).
@@ -164,13 +167,37 @@ def gather_cluster_data(namespace: str, res_type: str, res_name: str) -> str:
     return context
 
 
-def diagnose_cluster(cluster_data: str, provider: str = None):
-    """Send collected Kubernetes diagnostics to the unified LLM client."""
+def fetch_rag_context(cluster_data: str) -> str:
+    """Query local ChromaDB for matching internal runbooks using the latest error context."""
+    try:
+        rag = RAGEngine()
+        # Focus the embedding query on the resource header + recent logs/events
+        rag_query = cluster_data[:300] + "\n" + cluster_data[-1000:]
+        hits = rag.search(rag_query, top_k=2)
+        if hits:
+            print("[📚] Retrieved matching internal runbooks from ChromaDB.")
+        return hits
+    except Exception as e:
+        print(f"[⚠️] RAG lookup skipped ({e})")
+        return ""
+
+
+def diagnose_cluster(cluster_data: str, provider: str = None, use_rag: bool = True):
+    """Send collected Kubernetes diagnostics (+ optional RAG runbooks) to the LLM."""
+    runbook_context = fetch_rag_context(cluster_data) if use_rag else ""
+
+    prompt_parts = []
+    if runbook_context:
+        prompt_parts.append(f"=== INTERNAL RUNBOOKS / SOPs ===\n{runbook_context}\n")
+    prompt_parts.append(f"=== LIVE KUBERNETES / EKS DIAGNOSTICS ===\n{cluster_data}")
+
+    full_prompt = "\n".join(prompt_parts)
+
     client = LLMClient(provider=provider, role="specialist")
     print(f"[🧠] Diagnosing cluster data | Provider: {client.provider} | Model: {client.model}")
 
     report = client.generate(
-        prompt=f"Diagnose this Kubernetes/EKS resource:\n\n{cluster_data}",
+        prompt=f"Diagnose this Kubernetes/EKS resource:\n\n{full_prompt}",
         system_prompt=SYSTEM_PROMPT,
         temperature=0.1,
     )
@@ -186,6 +213,7 @@ if __name__ == "__main__":
     parser.add_argument("--type", "-t", dest="res_type", default="pod", help="Resource type: pod, svc, deployment (default: pod)")
     parser.add_argument("--name", help="Resource name (supports partial fuzzy matching for pods)")
     parser.add_argument("--mock", action="store_true", help="Use built-in mock CrashLoopBackOff diagnostics")
+    parser.add_argument("--no-rag", action="store_true", help="Disable local ChromaDB runbook lookup")
     parser.add_argument("--provider", choices=["ollama", "bedrock"], default=None, help="Override LLM provider")
     args = parser.parse_args()
 
@@ -199,4 +227,4 @@ if __name__ == "__main__":
             sys.exit(1)
         raw_data = gather_cluster_data(args.namespace, args.res_type.lower(), res_name)
 
-    diagnose_cluster(raw_data, provider=args.provider)
+    diagnose_cluster(raw_data, provider=args.provider, use_rag=not args.no_rag)
