@@ -25,9 +25,9 @@ class LLMClient:
             self.region = os.getenv("AWS_REGION", "us-east-1")
             self.bedrock = boto3.client("bedrock-runtime", region_name=self.region)
             if role == "router":
-                self.model = os.getenv("BEDROCK_ROUTER_MODEL", "amazon.nova-micro-v1:0")
+                self.model = os.getenv("BEDROCK_ROUTER_MODEL", "apac.amazon.nova-micro-v1:0")
             else:
-                self.model = os.getenv("BEDROCK_SPECIALIST_MODEL", "amazon.nova-lite-v1:0")
+                self.model = os.getenv("BEDROCK_SPECIALIST_MODEL", "apac.amazon.nova-lite-v1:0")
         else:
             raise ValueError(f"Unsupported LLM provider: {self.provider}. Use 'ollama' or 'bedrock'.")
 

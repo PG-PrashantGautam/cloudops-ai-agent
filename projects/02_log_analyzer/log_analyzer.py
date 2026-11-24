@@ -103,7 +103,7 @@ def fetch_rag_context(log_data: str) -> str:
         rag = RAGEngine()
         hits = rag.search(log_data[-1200:], top_k=2)
         if hits:
-            print("[📚] Retrieved matching internal runbooks from ChromaDB.")
+            print("[📚] Retrieved matching internal runbooks from RAG Knowledge Base.")
         return hits
     except Exception as e:
         print(f"[⚠️] RAG lookup skipped ({e})")

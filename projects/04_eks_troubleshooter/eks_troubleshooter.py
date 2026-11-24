@@ -175,7 +175,7 @@ def fetch_rag_context(cluster_data: str) -> str:
         rag_query = cluster_data[:300] + "\n" + cluster_data[-1000:]
         hits = rag.search(rag_query, top_k=2)
         if hits:
-            print("[📚] Retrieved matching internal runbooks from ChromaDB.")
+            print("[📚] Retrieved matching internal runbooks from RAG Knowledge Base.")
         return hits
     except Exception as e:
         print(f"[⚠️] RAG lookup skipped ({e})")

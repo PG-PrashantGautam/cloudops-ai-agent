@@ -1,136 +1,87 @@
-# PG-AI (v1.0) — Local Multi-Agent CloudOps CLI
+# PG-AI: Autonomous Dual-Mode CloudOps & AIOps Platform
 
-**PG-AI** (Prashant Gautam AI) is a local, zero-cost, privacy-first **Multi-Agent CloudOps CLI** built in Python. It uses a **Manager-Specialist (Division of Labor)** architecture powered by local LLMs via **Ollama** (`llama3.2` + `qwen2.5-coder:3b`), with optional **AWS Bedrock** fallback.
+**PG-AI** is a multi-agent CloudOps assistant and event-driven AIOps platform designed for AWS and Amazon EKS operations. It runs **100% locally at $0 cost** (Ollama + ChromaDB) or scales seamlessly to **AWS Cloud** (Amazon Bedrock Nova + Bedrock Managed Knowledge Base in `ap-south-1`).
 
 ---
 
-## 1. Architecture Overview (How to Explain It in a Video)
+## Architecture & Release Evolution
 
-Instead of forcing one giant model to do everything, PG-AI splits the work between a **fast Router** and **focused Specialists**:
+| Release | Milestone | Core Capabilities |
+| :--- | :--- | :--- |
+| **`v1.0`** | **Multi-Agent CLI** | Natural-language intent router (`pg_ai.py`) dispatching to 4 specialists: IAM Policy Generator + InfoSec Linter, CloudWatch Log Analyzer, FinOps Cost Anomaly Detector, and EKS Troubleshooter. |
+| **`v2.0`** | **Local RAG Engine** | Semantic runbook retrieval using **ChromaDB** and Ollama (`nomic-embed-text`) so diagnoses prioritize internal SOPs. |
+| **`v3.0`** | **Autonomous Agent (HITL)** | **LangGraph** ReAct loop (`langgraph_agent.py`) that inspects pods, consults runbooks, and pauses at `interrupt()` for **Human-in-the-Loop** approval before executing mutating `kubectl` actions. |
+| **`v4.0`** | **MCP Server** | Exposes CloudOps tools (`search_cloudops_runbooks`, `inspect_eks_pod`, `lint_iam_policy`) via **Model Context Protocol (MCP SDK v2.x)** over `stdio` for Kiro CLI, VS Code, and Claude Desktop. |
+| **`v5.0`** | **Event-Driven AIOps** | **FastAPI** webhook server (`webhook_server.py`) receiving **Prometheus Alertmanager** alerts, returning `202 Accepted` immediately, and running background RAG + LLM incident triage. |
+| **`v6.0`** | **AWS Bedrock Cloud Edition** | Dual-mode RAG & LLM backend in `ap-south-1` using **Amazon Nova** (`apac.amazon.nova-micro-v1:0` / `lite-v1:0`) and **AWS Bedrock Managed Knowledge Base**. |
+
+---
+
+## Project Structure
 
 ```text
-User Terminal: pg-ai "check promtail pod in observability"
-                         │
-                         ▼
-         ┌───────────────────────────────┐
-         │   MANAGER / ROUTER (pg_ai.py) │  Model: llama3.2 (3B)
-         │   Classifies intent -> JSON   │  Temp: 0.0 (Deterministic)
-         └───────────────┬───────────────┘
-                         │
-      ┌──────────────────┼──────────────────┬──────────────────┐
-      ▼                  ▼                  ▼                  ▼
-┌───────────┐      ┌───────────┐      ┌───────────┐      ┌───────────┐
-│ 01 IAM    │      │ 02 Logs   │      │ 03 Cost   │      │ 04 EKS    │
-│ Generator │      │ Analyzer  │      │ Analyzer  │      │ Troublesh.│
-└───────────┘      └───────────┘      └───────────┘      └───────────┘
-                   Model: qwen2.5-coder:3b (Specialist)
-```
-
-### Why This Design Matters
-* **Zero API Cost & 100% Privacy:** Sensitive logs, IAM ARNs, and Kubernetes configs never leave your laptop when running on Ollama.
-* **Fast Routing:** `llama3.2` (3B) only outputs a tiny JSON routing decision.
-* **Accurate Technical Output:** `qwen2.5-coder:3b` specializes in YAML, JSON, `kubectl`, and AWS CLI fixes.
-* **Offline Demo Ready:** Every specialist supports `--mock` mode so you can demo or teach the full pipeline without live AWS billing or a live cluster.
-
----
-
-## 2. Project Structure
-
-| Path | Role |
-| :--- | :--- |
-| `pg_ai.py` | Master CLI entry point & LLM intent router |
-| `core/llm_client.py` | Unified LLM wrapper supporting Ollama (local) and AWS Bedrock |
-| `projects/01_iam_generator/` | Least-privilege AWS IAM JSON generator + wildcard security linter |
-| `projects/02_log_analyzer/` | AWS CloudWatch Logs fetcher + AI root-cause analyzer |
-| `projects/03_cost_analyzer/` | AWS Cost Explorer FinOps anomaly detector |
-| `projects/04_eks_troubleshooter/` | Fuzzy pod matcher + status-based conditional `kubectl` troubleshooter |
-
----
-
-## 3. Complete Setup Guide (WSL2 / Ubuntu / Linux)
-
-### Step 1: Prerequisites
-* Python 3.10+
-* [Ollama](https://ollama.com/) installed and running
-* Pull the two lightweight local models:
-  ```bash
-  ollama pull llama3.2
-  ollama pull qwen2.5-coder:3b
-  ```
-* *(Optional for live AWS/EKS mode)*: `aws configure` and `kubectl` configured for your cluster.
-
-### Step 2: Install Dependencies
-```bash
-git clone <your-repo-url>
-cd pg-ai-v1.0
-
+cloudops-ai-agent/
+├── pg_ai.py                              # Main CLI & Intent Router
+├── core/
+│   ├── llm_client.py                     # Dual-mode LLM client (Ollama / AWS Bedrock)
+│   └── rag_engine.py                     # Dual-mode RAG engine (ChromaDB / Bedrock Managed KB)
+├── knowledge_base/runbooks/              # Internal Markdown SOPs (EKS, AWS, InfoSec)
+├── projects/
+│   ├── 01_iam_generator/                 # Least-privilege IAM generator & security linter
+│   ├── 02_log_analyzer/                  # CloudWatch Logs error triage
+│   ├── 03_cost_analyzer/                 # AWS Cost Explorer FinOps analyzer
+│   ├── 04_eks_troubleshooter/            # Kubernetes / EKS pod & event diagnostics
+│   ├── 05_autonomous_agent/              # v3.0 LangGraph ReAct + HITL agent
+│   ├── 06_mcp_server/                    # v4.0 MCP Server + stdio client test
+│   └── 07_alertmanager_webhook/          # v5.0 FastAPI Prometheus Alertmanager webhook
+└── requirements.txt
+Quick Start
+1. Setup Environment
+Bash
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env
-```
+2. Configure .env
+Code snippet
+# LLM Provider: "ollama" (local) or "bedrock" (AWS)
+LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_ROUTER_MODEL=llama3.2
+OLLAMA_SPECIALIST_MODEL=qwen2.5-coder:3b
+OLLAMA_EMBED_MODEL=nomic-embed-text
 
-### Step 3: Make `pg-ai` a Global Linux Command
-Create a launcher in `/usr/local/bin/pg-ai` pointing to your project's `venv` Python (update the path if your folder is elsewhere):
+# AWS Bedrock (ap-south-1)
+AWS_REGION=ap-south-1
+BEDROCK_ROUTER_MODEL_ID=apac.amazon.nova-micro-v1:0
+BEDROCK_SPECIALIST_MODEL_ID=apac.amazon.nova-lite-v1:0
 
-```bash
-sudo tee /usr/local/bin/pg-ai > /dev/null << 'EOF'
-#!/usr/bin/env bash
-exec /mnt/d/cloudops-ai-agent/venv/bin/python3 /mnt/d/cloudops-ai-agent/pg_ai.py "$@"
-EOF
+# RAG Provider: "local" (ChromaDB) or "bedrock" (Managed KB)
+RAG_PROVIDER=local
+BEDROCK_KB_ID=<your-kb-id>
+BEDROCK_DATA_SOURCE_ID=<your-data-source-id>
+BEDROCK_RUNBOOK_BUCKET=<your-s3-bucket>
+Usage Examples
+1. Ingest Internal Runbooks (Local ChromaDB or Bedrock KB):
 
-sudo chmod +x /usr/local/bin/pg-ai
-```
+Bash
+python3 pg_ai.py --ingest
+2. Multi-Agent CLI (Local Ollama vs. AWS Bedrock):
 
-Now you can run `pg-ai` from **any directory** without activating `venv`.
+Bash
+# Local ($0)
+python3 pg_ai.py "check promtail pod in observability" --mock
 
----
+# AWS Bedrock (Amazon Nova + Managed KB)
+python3 pg_ai.py "check promtail pod in observability" --mock --provider bedrock
+3. Autonomous LangGraph Agent with Human-in-the-Loop (v3.0):
 
-## 4. Quick Demo Commands (Great for Video Recording)
+Bash
+python3 pg_ai.py --agent "check promtail pod in observability, search runbooks, and restart daemonset if needed" --mock
+4. Model Context Protocol Server (v4.0):
 
-Run all 4 routes offline using `--mock`:
+Bash
+python3 projects/06_mcp_server/test_mcp_client.py
+5. Prometheus Alertmanager Webhook Server (v5.0):
 
-```bash
-# 1. EKS Troubleshooting (CrashLoopBackOff + YAML duplicate key)
-pg-ai "check promtail pod in observability" --mock
-
-# 2. IAM Policy Generation + Wildcard Security Linter
-pg-ai "create an IAM policy to read and write objects in s3 bucket pg-ai-backups"
-
-# 3. CloudWatch Log Analysis (Cross-account AssumeRole AccessDenied)
-pg-ai "check cloudwatch error logs for payment lambda" --mock
-
-# 4. FinOps Cost Anomaly Detection (NAT Gateway & Glue spike)
-pg-ai "check aws cost anomalies for the last 7 days" --mock
-```
-
-Switch to AWS Bedrock on any command:
-```bash
-pg-ai "check promtail pod in observability" --mock --provider bedrock
-```
-
----
-
-## 5. How to Push Version-Wise to GitHub (`v1.0`)
-
-```bash
-git init
-git add .
-git commit -m "Release PG-AI v1.0: Deterministic Multi-Agent CloudOps CLI"
-git branch -M main
-git remote add origin https://github.com/<your-username>/<your-repo>.git
-git push -u origin main
-
-# Tag v1.0 so viewers can always check out this exact version
-git tag -a v1.0 -m "PG-AI v1.0 — Local Multi-Agent CloudOps CLI"
-git push origin v1.0
-```
-
----
-
-## 6. Roadmap
-* **v1.0 (Current):** Global CLI, strict JSON router, 4 specialists, fuzzy pod matching, status-based conditional branching.
-* **v2.0 (Next):** Local RAG with ChromaDB + `nomic-embed-text` for internal runbooks and past RCA memory.
-* **v3.0:** Autonomous ReAct tool-calling loop with LangGraph + Human-in-the-Loop (HITL) guardrails.
-* **v4.0:** Model Context Protocol (MCP) server/client integration.
-* **v5.0:** Proactive AIOps with FastAPI + Prometheus Alertmanager webhooks.
+Bash
+uvicorn projects.07_alertmanager_webhook.webhook_server:app --host 0.0.0.0 --port 8000

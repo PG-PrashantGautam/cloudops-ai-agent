@@ -68,7 +68,7 @@ def fetch_rag_context(request: str) -> str:
         rag = RAGEngine()
         hits = rag.search(f"AWS IAM InfoSec guardrail policy for: {request}", top_k=2)
         if hits:
-            print("[📚] Retrieved matching InfoSec guardrails from ChromaDB.")
+            print("[📚] Retrieved matching InfoSec guardrails from RAG Knowledge Base.")
         return hits
     except Exception as e:
         print(f"[⚠️] RAG lookup skipped ({e})")
