@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import argparse
 import json
 import os
@@ -7,59 +6,55 @@ import sys
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
+sys.path.insert(0, str(ROOT_DIR))
 
 from core.llm_client import LLMClient
 
-ROUTER_SYSTEM_PROMPT = """You are the Master CloudOps Router Agent.
-Your job is to classify the user's natural-language infrastructure request into one of four specialist tools and extract parameters as STRICT JSON.
+ROUTER_SYSTEM_PROMPT = """You are the PG-AI CloudOps Intent Router.
+Classify the user's request into ONE of these four intents and extract the required parameters as raw JSON.
 
-AVAILABLE INTENTS & SCHEMAS:
-1. "iam" - Creating or modifying AWS IAM policies or permissions.
-   Parameters: {"request": "<exact permission request>"}
-2. "logs" - Analyzing AWS CloudWatch Logs or Lambda/application errors.
-   Parameters: {"log_group": "<log group name or empty string>", "filter": "<error keyword or ERROR>", "hours": 24}
-3. "cost" - Checking AWS billing, spend anomalies, or FinOps cost optimization.
+INTENTS & PARAMETERS:
+1. "iam"  -> Creating or generating AWS IAM policies.
+   Parameters: {"request": "<plain-English permission request>"}
+2. "logs" -> Checking or analyzing AWS CloudWatch logs / Lambda errors.
+   Parameters: {"log_group": "<log group name or empty string>", "hours": 24, "filter": "ERROR"}
+3. "cost" -> Analyzing AWS billing, spend, FinOps anomalies, or service costs.
    Parameters: {"days": 7}
-4. "eks" - Troubleshooting Kubernetes/EKS pods, services, deployments, or CrashLoopBackOff issues.
-   Parameters: {"namespace": "<namespace or default>", "res_type": "<pod|svc|deployment>", "res_name": "<resource name>"}
-5. "unknown" - Anything outside these four CloudOps domains.
+4. "eks"  -> Troubleshooting Kubernetes / Amazon EKS pods, services, deployments, or namespaces.
+   Parameters: {"namespace": "default", "res_type": "pod", "res_name": "<resource name>"}
+5. "unknown" -> Anything outside the 4 domains above.
    Parameters: {}
 
-STRICT RULES:
-- Output ONLY raw, valid JSON. No markdown backticks, no explanations.
-- Example output: {"intent": "eks", "parameters": {"namespace": "observability", "res_type": "pod", "res_name": "promtail"}}
+Output ONLY raw, valid JSON in this exact format (no markdown backticks, no explanations):
+{"intent": "<iam|logs|cost|eks|unknown>", "parameters": {...}}
 """
 
 
-def extract_json(raw_text: str) -> dict:
-    """Extract and parse the JSON object even if the router model adds extra text."""
+def clean_json_response(raw_text: str) -> str:
     start = raw_text.find("{")
     end = raw_text.rfind("}")
     if start != -1 and end != -1 and end > start:
-        return json.loads(raw_text[start : end + 1].strip())
-    return json.loads(raw_text.strip())
+        return raw_text[start : end + 1].strip()
+    return raw_text.strip()
 
 
-def route_query(query: str, provider: str = None) -> dict:
-    """Use the fast router model to classify intent and extract parameters."""
-    router = LLMClient(provider=provider, role="router")
-    print(f"[🧭] Routing query | Provider: {router.provider} | Router Model: {router.model}")
+def route_query(user_query: str, provider: str = None) -> dict:
+    client = LLMClient(provider=provider, role="router")
+    print(f"[🧭] Routing query | Provider: {client.provider} | Router Model: {client.model}")
 
-    raw_output = router.generate(
-        prompt=f"Classify this request:\n{query}",
+    raw = client.generate(
+        prompt=user_query,
         system_prompt=ROUTER_SYSTEM_PROMPT,
         temperature=0.0,
     )
 
     try:
-        decision = extract_json(raw_output)
-        print(f"[🔀] Route Decision: {json.dumps(decision)}")
-        return decision
-    except json.JSONDecodeError as e:
-        print(f"[❌] Router returned invalid JSON: {e}\nRaw output:\n{raw_output}")
-        sys.exit(1)
+        decision = json.loads(clean_json_response(raw))
+    except json.JSONDecodeError:
+        decision = {"intent": "unknown", "parameters": {}}
+
+    print(f"[🔀] Route Decision: {json.dumps(decision)}")
+    return decision
 
 
 def dispatch_to_specialist(
@@ -78,6 +73,8 @@ def dispatch_to_specialist(
             print("[❌] Router did not extract an IAM permission request.")
             sys.exit(1)
         cmd += [str(script), req]
+        if no_rag:
+            cmd += ["--no-rag"]
 
     elif intent == "logs":
         script = ROOT_DIR / "projects/02_log_analyzer/log_analyzer.py"
@@ -92,6 +89,8 @@ def dispatch_to_specialist(
                 cmd += ["--hours", str(params["hours"])]
             if params.get("filter"):
                 cmd += ["--filter", str(params["filter"])]
+        if no_rag:
+            cmd += ["--no-rag"]
 
     elif intent == "cost":
         script = ROOT_DIR / "projects/03_cost_analyzer/cost_analyzer.py"
@@ -134,12 +133,25 @@ if __name__ == "__main__":
     parser.add_argument("--mock", action="store_true", help="Run backend specialist in offline mock mode")
     parser.add_argument("--no-rag", action="store_true", help="Disable local ChromaDB runbook lookup")
     parser.add_argument("--ingest", action="store_true", help="Ingest all runbooks in knowledge_base/runbooks/ into ChromaDB")
+    parser.add_argument("--agent", action="store_true", help="Run v3.0 Autonomous LangGraph ReAct Agent (with HITL)")
     args = parser.parse_args()
 
     if args.ingest:
         from core.rag_engine import RAGEngine
         count = RAGEngine().ingest_runbooks()
         print(f"[✅] Knowledge base updated. Total chunks in ChromaDB: {count}")
+        sys.exit(0)
+
+    if args.agent:
+        script = ROOT_DIR / "projects/05_autonomous_agent/langgraph_agent.py"
+        cmd = [sys.executable, str(script)]
+        if args.query:
+            cmd.append(args.query)
+        if not args.mock:
+            cmd.append("--live")
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(ROOT_DIR) + os.pathsep + env.get("PYTHONPATH", "")
+        subprocess.run(cmd, env=env, check=False)
         sys.exit(0)
 
     user_query = args.query or input("Ask PG-AI:\n> ").strip()
